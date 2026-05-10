@@ -5,106 +5,244 @@ const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL || "http://localhost:4000/api",
 });
 
-function emptyFormDraft() {
+const formTrangThai = {
+  draft: "Nháp",
+  active: "Đang hoạt động",
+};
+
+function taoFormMoi() {
   return { title: "", description: "", order: 0, status: "draft" };
 }
 
-function emptyFieldDraft() {
-  return { label: "", type: "text", required: false, order: 0, options: "" };
+function taoFieldMoi() {
+  return { label: "", type: "text", required: "false", order: 0, options: "" };
 }
 
 function App() {
-  const [view, setView] = useState("admin");
+  const [nguoiDung, setNguoiDung] = useState(() => {
+    const raw = localStorage.getItem("nguoi_dung");
+    return raw ? JSON.parse(raw) : null;
+  });
+  const [dangNhap, setDangNhap] = useState({ username: "", password: "" });
   const [forms, setForms] = useState([]);
   const [selectedFormId, setSelectedFormId] = useState(null);
-  const [formDraft, setFormDraft] = useState(emptyFormDraft());
-  const [fieldDraft, setFieldDraft] = useState(emptyFieldDraft());
-  const [answers, setAnswers] = useState({});
-  const [submissions, setSubmissions] = useState([]);
-  const [message, setMessage] = useState("");
+  const [thongBao, setThongBao] = useState("");
+  const [loi, setLoi] = useState("");
+
+  const [formDraft, setFormDraft] = useState(taoFormMoi());
+  const [fieldDraft, setFieldDraft] = useState(taoFieldMoi());
+  const [taiKhoanMoi, setTaiKhoanMoi] = useState({ fullName: "", username: "", password: "" });
+  const [danhSachNhanVien, setDanhSachNhanVien] = useState([]);
+  const [submissionsAdmin, setSubmissionsAdmin] = useState([]);
+
+  const [traLoi, setTraLoi] = useState({});
+  const [submissionsNhanVien, setSubmissionsNhanVien] = useState([]);
 
   const selectedForm = useMemo(
     () => forms.find((form) => form.id === Number(selectedFormId)) || null,
     [forms, selectedFormId]
   );
-  async function loadForms(status) {
-    const { data } = await api.get("/forms", { params: status ? { status } : {} });
+
+  function authHeaders() {
+    if (!nguoiDung) return {};
+    return { "x-user-id": String(nguoiDung.id) };
+  }
+
+  async function goiApi(method, url, payload, params) {
+    return api.request({
+      method,
+      url,
+      data: payload,
+      params,
+      headers: authHeaders(),
+    });
+  }
+
+  async function taiDanhSachForm() {
+    const { data } = await goiApi("get", "/forms");
     setForms(data);
-    if (!selectedFormId && data.length) setSelectedFormId(data[0].id);
+    if (!data.find((item) => item.id === Number(selectedFormId))) {
+      setSelectedFormId(data[0]?.id ?? null);
+    }
   }
 
-  useEffect(() => {
-    loadForms();
-  }, []);
-
-  async function createForm() {
-    await api.post("/forms", { ...formDraft, order: Number(formDraft.order) });
-    setFormDraft(emptyFormDraft());
-    setMessage("Tao form thanh cong");
-    await loadForms();
+  async function taiDanhSachNhanVien() {
+    if (nguoiDung?.role !== "admin") return;
+    const { data } = await goiApi("get", "/users");
+    setDanhSachNhanVien(data);
   }
 
-  async function addField() {
+  async function taiSubmissionsAdmin() {
+    if (nguoiDung?.role !== "admin") return;
+    const { data } = await goiApi("get", "/submissions", null, {
+      formId: selectedFormId || undefined,
+    });
+    setSubmissionsAdmin(data);
+  }
+
+  async function taiSubmissionsNhanVien() {
+    if (nguoiDung?.role !== "employee" || !selectedFormId) return;
+    const { data } = await goiApi("get", `/forms/${selectedFormId}/submissions`);
+    setSubmissionsNhanVien(data);
+  }
+
+  async function xuLyDangNhap(e) {
+    e.preventDefault();
+    setLoi("");
+    try {
+      const { data } = await api.post("/auth/login", dangNhap);
+      localStorage.setItem("nguoi_dung", JSON.stringify(data));
+      setNguoiDung(data);
+      setThongBao(`Xin chào, ${data.fullName}`);
+    } catch (error) {
+      setLoi(error.response?.data?.message || "Đăng nhập thất bại");
+    }
+  }
+
+  function dangXuat() {
+    localStorage.removeItem("nguoi_dung");
+    setNguoiDung(null);
+    setForms([]);
+    setSelectedFormId(null);
+    setThongBao("");
+    setLoi("");
+  }
+
+  async function taoForm() {
+    await goiApi("post", "/forms", { ...formDraft, order: Number(formDraft.order) });
+    setThongBao("Tạo biểu mẫu thành công");
+    setFormDraft(taoFormMoi());
+    await taiDanhSachForm();
+  }
+
+  async function xoaForm(id) {
+    if (!window.confirm("Bạn có chắc muốn xóa biểu mẫu này?")) return;
+    await goiApi("delete", `/forms/${id}`);
+    setThongBao("Đã xóa biểu mẫu");
+    await taiDanhSachForm();
+    setTraLoi({});
+    setSubmissionsNhanVien([]);
+    setSubmissionsAdmin([]);
+  }
+
+  async function themField() {
     if (!selectedFormId) return;
-    await api.post(`/forms/${selectedFormId}/fields`, {
-      ...fieldDraft,
+    await goiApi("post", `/forms/${selectedFormId}/fields`, {
+      label: fieldDraft.label,
+      type: fieldDraft.type,
+      required: fieldDraft.required === "true",
       order: Number(fieldDraft.order),
       options:
         fieldDraft.type === "select"
-          ? fieldDraft.options.split(",").map((item) => item.trim()).filter(Boolean)
+          ? fieldDraft.options
+              .split(",")
+              .map((item) => item.trim())
+              .filter(Boolean)
           : undefined,
     });
-    setFieldDraft(emptyFieldDraft());
-    setMessage("Them field thanh cong");
-    await loadForms();
+    setThongBao("Đã thêm trường dữ liệu");
+    setFieldDraft(taoFieldMoi());
+    await taiDanhSachForm();
   }
 
-  async function deleteField(fieldId) {
-    await api.delete(`/forms/${selectedFormId}/fields/${fieldId}`);
-    await loadForms();
+  async function xoaField(fieldId) {
+    await goiApi("delete", `/forms/${selectedFormId}/fields/${fieldId}`);
+    setThongBao("Đã xóa trường dữ liệu");
+    await taiDanhSachForm();
   }
 
-  async function submitAnswers() {
+  async function taoTaiKhoanNhanVien() {
+    await goiApi("post", "/users", taiKhoanMoi);
+    setThongBao("Đã tạo tài khoản nhân viên");
+    setTaiKhoanMoi({ fullName: "", username: "", password: "" });
+    await taiDanhSachNhanVien();
+  }
+
+  async function xoaTaiKhoanNhanVien(id) {
+    if (!window.confirm("Bạn có chắc muốn xóa tài khoản nhân viên này?")) return;
+    await goiApi("delete", `/users/${id}`);
+    setThongBao("Đã xóa tài khoản nhân viên");
+    await taiDanhSachNhanVien();
+  }
+
+  async function nopBieuMau() {
     if (!selectedFormId) return;
-    await api.post(`/forms/${selectedFormId}/submissions`, { answers });
-    setAnswers({});
-    setMessage("Gui form thanh cong");
+    await goiApi("post", `/forms/${selectedFormId}/submissions`, { answers: traLoi });
+    setThongBao("Nộp biểu mẫu thành công");
+    setTraLoi({});
+    await taiSubmissionsNhanVien();
   }
 
-  async function loadSubmissions() {
-    if (!selectedFormId) return;
-    const { data } = await api.get(`/forms/${selectedFormId}/submissions`);
-    setSubmissions(data);
+  useEffect(() => {
+    if (!nguoiDung) return;
+    taiDanhSachForm().catch(() => setLoi("Không tải được danh sách biểu mẫu"));
+  }, [nguoiDung]);
+
+  useEffect(() => {
+    if (!nguoiDung) return;
+    if (nguoiDung.role === "admin") {
+      taiDanhSachNhanVien().catch(() => setLoi("Không tải được danh sách nhân viên"));
+      taiSubmissionsAdmin().catch(() => setLoi("Không tải được danh sách đơn nộp"));
+    } else {
+      taiSubmissionsNhanVien().catch(() => setLoi("Không tải được lịch sử nộp"));
+    }
+  }, [nguoiDung, selectedFormId]);
+
+  if (!nguoiDung) {
+    return (
+      <div className="container login-wrapper">
+        <form className="card login-card" onSubmit={xuLyDangNhap}>
+          <h1>Hệ thống biểu mẫu động</h1>
+          <p>Đăng nhập để vào đúng trang theo vai trò tài khoản.</p>
+          <input
+            placeholder="Tên đăng nhập"
+            value={dangNhap.username}
+            onChange={(e) => setDangNhap((prev) => ({ ...prev, username: e.target.value }))}
+          />
+          <input
+            type="password"
+            placeholder="Mật khẩu"
+            value={dangNhap.password}
+            onChange={(e) => setDangNhap((prev) => ({ ...prev, password: e.target.value }))}
+          />
+          <button type="submit" className="btn btn-primary">
+            Đăng nhập
+          </button>
+          {loi && <p className="error">{loi}</p>}
+        </form>
+      </div>
+    );
   }
 
   return (
     <div className="container">
-      <h1>Dynamic Form Builder</h1>
-      <div className="tabs">
-        <button onClick={() => setView("admin")} className={view === "admin" ? "active" : ""}>
-          Admin
+      <header className="top-bar">
+        <div>
+          <h1>{nguoiDung.role === "admin" ? "Trang quản trị" : "Trang nhân viên"}</h1>
+          <p>
+            Đăng nhập: <b>{nguoiDung.fullName}</b> ({nguoiDung.username})
+          </p>
+        </div>
+        <button className="btn" onClick={dangXuat}>
+          Đăng xuất
         </button>
+      </header>
 
-        <button onClick={() => setView("employee")} className={view === "employee" ? "active" : ""}>
-          Nhan vien
-        </button>
-      </div>
-
-      {message && <p className="message">{message}</p>}
+      {thongBao && <p className="message">{thongBao}</p>}
+      {loi && <p className="error">{loi}</p>}
 
       <div className="layout">
         <aside className="left">
-          <h3>Danh sach forms</h3>
-          <button onClick={() => loadForms()}>Refresh</button>
+          <h3>Danh sách biểu mẫu</h3>
           <ul>
-
-          {forms.map((form) => (
+            {forms.map((form) => (
               <li key={form.id}>
                 <button
-                  className={Number(selectedFormId) === form.id ? "active" : ""}
+                  className={Number(selectedFormId) === form.id ? "btn active" : "btn"}
                   onClick={() => setSelectedFormId(form.id)}
                 >
-                  {form.title} ({form.status})
+                  #{form.id} - {form.title}
+                  <span className="status-chip">{formTrangThai[form.status] || form.status}</span>
                 </button>
               </li>
             ))}
@@ -112,170 +250,266 @@ function App() {
         </aside>
 
         <main className="right">
-          {view === "admin" ? (
+          <section className="card">
+            <h3>Biểu mẫu đang chọn</h3>
+            {selectedForm ? (
+              <div className="selected-form">
+                <b>
+                  #{selectedForm.id} - {selectedForm.title}
+                </b>
+                <p>{selectedForm.description || "Chưa có mô tả"}</p>
+                <button className="btn btn-danger" onClick={() => xoaForm(selectedForm.id)}>
+                  Xóa biểu mẫu
+                </button>
+              </div>
+            ) : (
+              <p>Chưa có biểu mẫu để hiển thị.</p>
+            )}
+          </section>
+
+          {nguoiDung.role === "admin" ? (
             <>
-            <section className="card">
-              <h3>Tao form</h3>
-              <input
-                placeholder="Title"
-                value={formDraft.title}
-                onChange={(e) => setFormDraft((p) => ({ ...p, title: e.target.value }))}
-              />
-              <textarea
-                placeholder="Description"
-                value={formDraft.description}
-                onChange={(e) => setFormDraft((p) => ({ ...p, description: e.target.value }))}
-              />
-              <input
-                  type="number"
-                  placeholder="Order"
-                  value={formDraft.order}
-                  onChange={(e) => setFormDraft((p) => ({ ...p, order: e.target.value }))}
-              />
-              <select
-                value={formDraft.status}
-                onChange={(e) => setFormDraft((p) => ({ ...p, status: e.target.value }))}
-              >
-                <option value="draft">draft</option>
-                <option value="active">active</option>
-              </select>
-              <button onClick={createForm}>Tao form</button>
-            </section>
+              <section className="card">
+                <h3>Tạo biểu mẫu</h3>
+                <div className="form-grid">
+                  <input
+                    placeholder="Tiêu đề"
+                    value={formDraft.title}
+                    onChange={(e) => setFormDraft((prev) => ({ ...prev, title: e.target.value }))}
+                  />
+                  <textarea
+                    placeholder="Mô tả"
+                    value={formDraft.description}
+                    onChange={(e) =>
+                      setFormDraft((prev) => ({ ...prev, description: e.target.value }))
+                    }
+                  />
+                  <input
+                    type="number"
+                    placeholder="Thứ tự hiển thị"
+                    value={formDraft.order}
+                    onChange={(e) => setFormDraft((prev) => ({ ...prev, order: e.target.value }))}
+                  />
+                  <select
+                    value={formDraft.status}
+                    onChange={(e) => setFormDraft((prev) => ({ ...prev, status: e.target.value }))}
+                  >
+                    <option value="draft">Nháp</option>
+                    <option value="active">Đang hoạt động</option>
+                  </select>
+                  <button className="btn btn-primary" onClick={taoForm}>
+                    Tạo biểu mẫu
+                  </button>
+                </div>
+              </section>
 
-
-            <section className="card">
-                <h3>Them field cho form dang chon</h3>
+              <section className="card">
+                <h3>Thêm trường dữ liệu</h3>
                 {!selectedForm ? (
-                  <p>Chua chon form</p>
+                  <p>Vui lòng chọn biểu mẫu trước khi thêm trường dữ liệu.</p>
                 ) : (
-                  <>
-                    <p>Form: {selectedForm.title}</p>
+                  <div className="form-grid">
                     <input
-                      placeholder="Label"
+                      placeholder="Nhãn trường dữ liệu"
                       value={fieldDraft.label}
-                      onChange={(e) => setFieldDraft((p) => ({ ...p, label: e.target.value }))}
+                      onChange={(e) => setFieldDraft((prev) => ({ ...prev, label: e.target.value }))}
                     />
                     <select
                       value={fieldDraft.type}
-                      onChange={(e) => setFieldDraft((p) => ({ ...p, type: e.target.value }))}
+                      onChange={(e) => setFieldDraft((prev) => ({ ...prev, type: e.target.value }))}
                     >
-                      <option value="text">text</option>
-                      <option value="number">number</option>
-                      <option value="date">date</option>
-                      <option value="color">color</option>
-                      <option value="select">select</option>
+                      <option value="text">Văn bản</option>
+                      <option value="number">Số</option>
+                      <option value="date">Ngày</option>
+                      <option value="color">Màu sắc</option>
+                      <option value="select">Danh sách lựa chọn</option>
                     </select>
-                    <label>
-                      <input
-                        type="checkbox"
-                        checked={fieldDraft.required}
-                        onChange={(e) => setFieldDraft((p) => ({ ...p, required: e.target.checked }))}
-                      />
-                      Required
-                    </label>
+                    <select
+                      value={fieldDraft.required}
+                      onChange={(e) =>
+                        setFieldDraft((prev) => ({ ...prev, required: e.target.value }))
+                      }
+                    >
+                      <option value="false">Không bắt buộc</option>
+                      <option value="true">Bắt buộc</option>
+                    </select>
                     <input
                       type="number"
-                      placeholder="Order"
+                      placeholder="Thứ tự hiển thị"
                       value={fieldDraft.order}
-                      onChange={(e) => setFieldDraft((p) => ({ ...p, order: e.target.value }))}
+                      onChange={(e) => setFieldDraft((prev) => ({ ...prev, order: e.target.value }))}
                     />
                     {fieldDraft.type === "select" && (
                       <input
-                        placeholder="Options: red,green,blue"
+                        placeholder="Nhập lựa chọn, cách nhau dấu phẩy"
                         value={fieldDraft.options}
-                        onChange={(e) => setFieldDraft((p) => ({ ...p, options: e.target.value }))}
+                        onChange={(e) =>
+                          setFieldDraft((prev) => ({ ...prev, options: e.target.value }))
+                        }
                       />
                     )}
-                    <button onClick={addField}>Them field</button>
+                    <button className="btn btn-primary" onClick={themField}>
+                      Thêm trường dữ liệu
+                    </button>
+                  </div>
+                )}
+              </section>
+
+              <section className="card">
+                <h3>Danh sách trường dữ liệu</h3>
+                {selectedForm?.fields?.length ? (
+                  <ul className="list">
+                    {selectedForm.fields.map((field) => (
+                      <li key={field.id} className="list-item">
+                        <div>
+                          <b>{field.label}</b> - {field.type} - Thứ tự: {field.order}
+                        </div>
+                        <button className="btn btn-danger" onClick={() => xoaField(field.id)}>
+                          Xóa
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p>Biểu mẫu này chưa có trường dữ liệu.</p>
+                )}
+              </section>
+
+              <section className="card">
+                <h3>Quản lý tài khoản nhân viên</h3>
+                <div className="form-grid">
+                  <input
+                    placeholder="Họ và tên"
+                    value={taiKhoanMoi.fullName}
+                    onChange={(e) =>
+                      setTaiKhoanMoi((prev) => ({ ...prev, fullName: e.target.value }))
+                    }
+                  />
+                  <input
+                    placeholder="Tên đăng nhập"
+                    value={taiKhoanMoi.username}
+                    onChange={(e) =>
+                      setTaiKhoanMoi((prev) => ({ ...prev, username: e.target.value }))
+                    }
+                  />
+                  <input
+                    type="password"
+                    placeholder="Mật khẩu"
+                    value={taiKhoanMoi.password}
+                    onChange={(e) =>
+                      setTaiKhoanMoi((prev) => ({ ...prev, password: e.target.value }))
+                    }
+                  />
+                  <button className="btn btn-primary" onClick={taoTaiKhoanNhanVien}>
+                    Tạo tài khoản nhân viên
+                  </button>
+                </div>
+                <ul className="list">
+                  {danhSachNhanVien.map((user) => (
+                    <li key={user.id} className="list-item">
+                      <div>
+                        <b>{user.fullName}</b> ({user.username})
+                      </div>
+                      <button className="btn btn-danger" onClick={() => xoaTaiKhoanNhanVien(user.id)}>
+                        Xóa
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+
+              <section className="card">
+                <h3>Danh sách đơn nộp của nhân viên</h3>
+                <ul className="list">
+                  {submissionsAdmin.map((submission) => (
+                    <li key={submission.id} className="list-block">
+                      <b>
+                        #{submission.id} - {submission.user?.fullName} -{" "}
+                        {new Date(submission.createdAt).toLocaleString("vi-VN")}
+                      </b>
+                      <p>Biểu mẫu: {submission.form?.title}</p>
+                      {submission.answers.map((answer) => (
+                        <p key={`${submission.id}-${answer.fieldId}`}>
+                          {answer.fieldLabel}: {answer.value}
+                        </p>
+                      ))}
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            </>
+          ) : (
+            <>
+              <section className="card">
+                <h3>Điền biểu mẫu</h3>
+                {!selectedForm ? (
+                  <p>Vui lòng chọn biểu mẫu để điền.</p>
+                ) : (
+                  <>
+                    {[...(selectedForm.fields || [])]
+                      .sort((a, b) => a.order - b.order)
+                      .map((field) => (
+                        <div key={field.id} className="field-row">
+                          <label>{field.label}</label>
+                          {field.type === "select" ? (
+                            <select
+                              value={traLoi[field.id] || ""}
+                              onChange={(e) =>
+                                setTraLoi((prev) => ({ ...prev, [field.id]: e.target.value }))
+                              }
+                            >
+                              <option value="">-- Chọn giá trị --</option>
+                              {(field.options || []).map((opt) => (
+                                <option key={opt} value={opt}>
+                                  {opt}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            <input
+                              type={
+                                field.type === "number"
+                                  ? "number"
+                                  : field.type === "date"
+                                    ? "date"
+                                    : field.type === "color"
+                                      ? "color"
+                                      : "text"
+                              }
+                              value={traLoi[field.id] || ""}
+                              onChange={(e) =>
+                                setTraLoi((prev) => ({ ...prev, [field.id]: e.target.value }))
+                              }
+                            />
+                          )}
+                        </div>
+                      ))}
+                    <button className="btn btn-primary" onClick={nopBieuMau}>
+                      Nộp biểu mẫu
+                    </button>
                   </>
                 )}
               </section>
 
               <section className="card">
-                <h3>Fields hien tai</h3>
-                {selectedForm?.fields?.length ? (
-                  <ul>
-                    {selectedForm.fields.map((field) => (
-                      <li key={field.id}>
-                        {field.label} - {field.type} - order:{field.order}
-                        <button onClick={() => deleteField(field.id)}>Xoa</button>
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p>Form nay chua co field</p>
-                )}
+                <h3>Đơn nộp của tôi</h3>
+                <ul className="list">
+                  {submissionsNhanVien.map((submission) => (
+                    <li key={submission.id} className="list-block">
+                      <b>
+                        #{submission.id} -{" "}
+                        {new Date(submission.createdAt).toLocaleString("vi-VN")}
+                      </b>
+                      {submission.answers.map((answer) => (
+                        <p key={`${submission.id}-${answer.fieldId}`}>
+                          {answer.fieldLabel}: {answer.value}
+                        </p>
+                      ))}
+                    </li>
+                  ))}
+                </ul>
               </section>
             </>
-          ) : (  
-            <section className="card">
-              <h3>Nhap form</h3>
-              {!selectedForm ? (
-                <p>Khong co form</p>
-              ) : (
-                <>
-                  <p>
-                    <b>{selectedForm.title}</b> - {selectedForm.description}
-                  </p>
-                  {[...(selectedForm.fields || [])]
-                    .sort((a, b) => a.order - b.order)
-                    .map((field) => (
-                      <div key={field.id} className="field-row">
-                        <label>{field.label}</label>
-                        {field.type === "select" ? (
-                          <select
-                            value={answers[field.id] || ""}
-                            onChange={(e) =>
-                              setAnswers((prev) => ({ ...prev, [field.id]: e.target.value }))
-                            }
-                          >
-                            <option value="">--chon--</option>
-                            {(field.options || []).map((opt) => (
-                              <option key={opt} value={opt}>
-                                {opt}
-                              </option>
-                            ))}
-                          </select>
-                        ) : (
-                          <input
-                            type={
-                              field.type === "number"
-                                ? "number"
-                                : field.type === "date"
-                                  ? "date"
-                                  : field.type === "color"
-                                    ? "color"
-                                    : "text"
-                            }
-                            value={answers[field.id] || ""}
-                            onChange={(e) =>
-                              setAnswers((prev) => ({ ...prev, [field.id]: e.target.value }))
-                            }
-                          />
-                        )}
-                      </div>
-                    ))}
-                  <button onClick={submitAnswers}>Gui</button>
-                  <button onClick={loadSubmissions}>Xem submissions</button>
-
-                  <h4>Submission history</h4>
-                  <ul>
-                    {submissions.map((submission) => (
-                      <li key={submission.id}>
-                        #{submission.id} - {new Date(submission.createdAt).toLocaleString()}
-                        <ul>
-                          {submission.answers.map((answer) => (
-                            <li key={`${submission.id}-${answer.fieldId}`}>
-                              {answer.fieldLabel}: {answer.value}
-                            </li>
-                          ))}
-                        </ul>
-                      </li>
-                    ))}
-                  </ul>
-                </>
-              )}
-            </section>
           )}
         </main>
       </div>
