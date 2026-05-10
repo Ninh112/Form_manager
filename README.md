@@ -77,3 +77,7 @@ npm run dev
 Mặc định ứng dụng Frontend sẽ được chạy tại `http://localhost:5173`. Frontend đã được cấu hình Axios để tự động gọi các request tới Backend.
 
 ---
+
+## 3. Hướng dẫn đăng nhập
+tài khoản và mật khẩu ở trong file env.example
+<img width="1875" height="1004" alt="image" src="https://github.com/user-attachments/assets/734cfde1-c8d1-44b0-9f5e-85a43d6a6218" />
